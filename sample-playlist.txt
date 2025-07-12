@@ -1,0 +1,21 @@
+# Sample playlist file for create-slideshow.sh
+# Add YouTube URLs or video IDs, one per line
+# Lines starting with # are comments and will be ignored
+# Empty lines are also ignored
+
+# Classical music for elegant slideshows
+https://youtube.com/watch?v=GRxofEmo3HA    # Pachelbel - Canon in D
+https://youtube.com/watch?v=4Tr0otuiQuU    # Vivaldi - Four Seasons
+
+# You can also use just the video ID
+aqz-KE-bpKQ                                # Big Buck Bunny Soundtrack
+
+# Modern instrumental music
+https://youtube.com/watch?v=gJeh_dLjPN4    # Emotional Piano Music
+
+# Tips:
+# - Use instrumental music to avoid distracting from your photos
+# - Consider the mood and pacing of your slideshow
+# - Multiple songs will be concatenated in order
+# - Use --loop-audio if your music is shorter than the slideshow
+# - Use --extend-to-audio to make the slideshow match the music length

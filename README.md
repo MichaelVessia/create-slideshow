@@ -8,6 +8,8 @@ A safe, user-friendly Bash script that creates MP4 video slideshows from collect
 - **Automatic image rotation**: Handles EXIF orientation data intelligently
 - **Random ordering**: Images are shuffled for variety
 - **Professional output**: Full HD (1920x1080) MP4 video with H.264 encoding
+- **Background music support**: Add music from YouTube, local files, or playlists
+- **Flexible audio options**: Loop short audio, extend video to match audio, or fade out
 - **Cross-platform compatibility**: Works with standard Unix utilities
 - **User-friendly**: Clear progress indicators and safety confirmations
 
@@ -21,6 +23,9 @@ A safe, user-friendly Bash script that creates MP4 video slideshows from collect
 ### Optional (but recommended)
 - **exiftool** OR **ImageMagick** - for automatic image rotation based on EXIF data
   - The script will work without these, but images may not be correctly oriented
+- **yt-dlp** - for downloading audio from YouTube
+  - Required only if you want to use YouTube URLs for background music
+  - The script will work without this, but won't be able to download YouTube audio
 
 ### Installation
 
@@ -29,10 +34,15 @@ A safe, user-friendly Bash script that creates MP4 video slideshows from collect
 # Required
 sudo apt-get install ffmpeg
 
-# Optional (choose one)
+# Optional for image rotation (choose one)
 sudo apt-get install exiftool       # Recommended
 # OR
 sudo apt-get install imagemagick    # Alternative
+
+# Optional for YouTube music
+sudo apt-get install yt-dlp
+# OR
+pip install yt-dlp
 ```
 
 #### macOS (using Homebrew)
@@ -40,29 +50,48 @@ sudo apt-get install imagemagick    # Alternative
 # Required
 brew install ffmpeg
 
-# Optional (choose one)
+# Optional for image rotation (choose one)
 brew install exiftool               # Recommended
 # OR
 brew install imagemagick            # Alternative
+
+# Optional for YouTube music
+brew install yt-dlp
 ```
 
 ## Usage
 
 ```bash
-./create-slideshow.sh <directory_path>
+./create-slideshow.sh <directory_path> [options]
 ```
+
+### Options
+
+- `-m, --music <input>` - Add background music (YouTube URL, playlist file, or local audio)
+- `--loop-audio` - Loop audio if it's shorter than the video
+- `--extend-to-audio` - Extend slideshow duration to match audio length
+- `--fade-duration <seconds>` - Audio fade out duration (default: 3 seconds)
 
 ### Examples
 
 ```bash
-# Process images from external drive
-./create-slideshow.sh /media/username/drive/photos
-
-# Process images from Pictures folder
+# Basic slideshow without music
 ./create-slideshow.sh ~/Pictures
 
-# Process images from current directory
-./create-slideshow.sh .
+# Add music from YouTube
+./create-slideshow.sh ~/Pictures -m "https://youtube.com/watch?v=dQw4w9WgXcQ"
+
+# Add multiple YouTube songs (comma-separated)
+./create-slideshow.sh ~/Pictures -m "url1,url2,url3"
+
+# Use a playlist file
+./create-slideshow.sh ~/Pictures -m playlist.txt
+
+# Use local audio file and loop it
+./create-slideshow.sh ~/Pictures -m background.mp3 --loop-audio
+
+# Extend slideshow to match audio duration
+./create-slideshow.sh ~/Pictures -m playlist.txt --extend-to-audio
 ```
 
 ## Configuration
@@ -71,6 +100,30 @@ The script has one main configurable parameter that can be modified by editing t
 
 - **`DURATION_PER_IMAGE`**: Duration each image is displayed (default: 5 seconds)
   - Edit line near the top of the script: `DURATION_PER_IMAGE=5`
+
+## Music Playlists
+
+You can create a playlist file to specify multiple songs for your slideshow. The playlist format is simple:
+
+```txt
+# Comments start with #
+https://youtube.com/watch?v=dQw4w9WgXcQ
+https://youtube.com/watch?v=abcdef12345
+
+# You can also use just video IDs
+dQw4w9WgXcQ
+xyz789
+
+# Empty lines are ignored
+```
+
+See `sample-playlist.txt` for a complete example.
+
+### Music Options Explained
+
+- **Loop Audio**: If your music is shorter than the slideshow, it will repeat
+- **Extend to Audio**: The slideshow will be lengthened to match the music duration
+- **Fade Duration**: Audio will fade out smoothly at the end (default: 3 seconds)
 
 ## Output
 
