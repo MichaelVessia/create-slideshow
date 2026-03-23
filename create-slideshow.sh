@@ -374,83 +374,142 @@ if [ -n "$MUSIC_INPUT" ]; then
   echo ""
 fi
 
-# Copy images
-echo "📋 Finding and randomizing images..."
-mapfile -d '' files < <(find "$SOURCE_DIR" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" \) -print0 | shuf -z)
+# Find media files
+echo "📋 Finding and randomizing media..."
+mapfile -d '' files < <(find "$SOURCE_DIR" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.mov" -o -iname "*.mp4" -o -iname "*.avi" -o -iname "*.mkv" -o -iname "*.webm" -o -iname "*.m4v" \) -print0 | shuf -z)
 
 if [ ${#files[@]} -eq 0 ]; then
-  echo "❌ No images found in $SOURCE_DIR"
+  echo "❌ No media files found in $SOURCE_DIR"
   cd "$HOME" || exit 1
   rmdir "$WORK_DIR"
   exit 1
 fi
 
-echo "📷 Found ${#files[@]} images"
-echo "📋 Copying and auto-rotating images based on EXIF..."
+# Classify files into images and videos
+image_count=0
+video_count=0
+for f in "${files[@]}"; do
+  ext="${f##*.}"
+  ext_lower=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
+  case "$ext_lower" in
+    jpg|jpeg|png|heic) ((image_count++)) || true ;;
+    mov|mp4|avi|mkv|webm|m4v) ((video_count++)) || true ;;
+  esac
+done
 
-# Check if exiftool is available
-if command -v exiftool &>/dev/null; then
+echo "📷 Found ${#files[@]} media files ($image_count images, $video_count videos)"
+echo "📋 Processing media files..."
+
+# Detect available image tools
+HAS_EXIFTOOL=false
+HAS_MAGICK=false
+HAS_CONVERT=false
+command -v exiftool &>/dev/null && HAS_EXIFTOOL=true
+command -v magick &>/dev/null && HAS_MAGICK=true
+command -v convert &>/dev/null && HAS_CONVERT=true
+
+if $HAS_EXIFTOOL; then
   echo "✅ Using exiftool for EXIF-based rotation"
-  for i in "${!files[@]}"; do
-    printf "\rProcessing: %d/%d" $((i + 1)) ${#files[@]}
-    output_name="$(printf "%04d" $((i + 1))).jpg"
-    cp "${files[$i]}" "$output_name"
-    # Auto-rotate based on EXIF and remove orientation tag
-    exiftool -overwrite_original -Orientation= -n -q "$output_name"
-  done
-elif command -v magick &>/dev/null; then
+elif $HAS_MAGICK; then
   echo "✅ Using ImageMagick v7 for EXIF-based rotation"
-  for i in "${!files[@]}"; do
-    printf "\rProcessing: %d/%d" $((i + 1)) ${#files[@]}
-    output_name="$(printf "%04d" $((i + 1))).jpg"
-    # Auto-orient images based on EXIF data using ImageMagick v7
-    magick "${files[$i]}" -auto-orient "$output_name"
-  done
-elif command -v convert &>/dev/null; then
+elif $HAS_CONVERT; then
   echo "✅ Using ImageMagick v6 for EXIF-based rotation"
-  for i in "${!files[@]}"; do
-    printf "\rProcessing: %d/%d" $((i + 1)) ${#files[@]}
-    output_name="$(printf "%04d" $((i + 1))).jpg"
-    # Auto-orient images based on EXIF data
-    convert "${files[$i]}" -auto-orient "$output_name" 2>/dev/null || convert "${files[$i]}" -auto-orient "$output_name"
-  done
 else
   echo "⚠️  Neither exiftool nor ImageMagick found. Installing one is recommended."
   echo "   Install with: sudo apt install exiftool  OR  sudo apt install imagemagick"
-  echo "   Continuing without auto-rotation..."
-  for i in "${!files[@]}"; do
-    printf "\rCopying: %d/%d" $((i + 1)) ${#files[@]}
-    cp "${files[$i]}" "$(printf "%04d" $((i + 1))).jpg"
-  done
+  echo "   Continuing without auto-rotation for images..."
 fi
+
+processed_files=()
+total_clip_duration=0
+
+for i in "${!files[@]}"; do
+  printf "\rProcessing: %d/%d" $((i + 1)) ${#files[@]}
+  src="${files[$i]}"
+  ext="${src##*.}"
+  ext_lower=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
+  seq_num="$(printf "%04d" $((i + 1)))"
+
+  case "$ext_lower" in
+    jpg|jpeg|png)
+      output_name="${seq_num}.jpg"
+      if $HAS_EXIFTOOL; then
+        cp "$src" "$output_name"
+        exiftool -overwrite_original -Orientation= -n -q "$output_name"
+      elif $HAS_MAGICK; then
+        magick "$src" -auto-orient "$output_name"
+      elif $HAS_CONVERT; then
+        convert "$src" -auto-orient "$output_name" 2>/dev/null || convert "$src" -auto-orient "$output_name"
+      else
+        cp "$src" "$output_name"
+      fi
+      processed_files+=("$output_name")
+      ;;
+    heic)
+      output_name="${seq_num}.jpg"
+      if $HAS_MAGICK; then
+        magick "$src" -auto-orient "$output_name"
+      elif $HAS_CONVERT; then
+        convert "$src" -auto-orient "$output_name" 2>/dev/null || convert "$src" -auto-orient "$output_name"
+      else
+        ffmpeg -loglevel error -i "$src" -vframes 1 "$output_name"
+      fi
+      processed_files+=("$output_name")
+      ;;
+    mov|mp4|avi|mkv|webm|m4v)
+      output_name="${seq_num}.mp4"
+      ffmpeg -loglevel error -i "$src" \
+        -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:color=black,format=yuv420p" \
+        -c:v libx264 -pix_fmt yuv420p -an \
+        -y "$output_name"
+      clip_dur=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$output_name" 2>/dev/null)
+      total_clip_duration=$(echo "$total_clip_duration + $clip_dur" | bc)
+      processed_files+=("$output_name")
+      ;;
+  esac
+done
 echo ""
 
 # Calculate video duration
-VIDEO_DURATION=$((${#files[@]} * DURATION_PER_IMAGE))
-echo "📹 Video duration: ${VIDEO_DURATION}s"
+# total_clip_duration may be fractional; truncate to integer for arithmetic
+total_clip_duration_int=$(printf "%.0f" "$total_clip_duration")
+VIDEO_DURATION=$(( image_count * DURATION_PER_IMAGE + total_clip_duration_int ))
+echo "📹 Video duration: ${VIDEO_DURATION}s ($image_count images x ${DURATION_PER_IMAGE}s + ${total_clip_duration_int}s video clips)"
 
 # Adjust duration if extending to audio
 if [ -n "$AUDIO_FILE" ] && [ "$EXTEND_TO_AUDIO" = true ] && [ $AUDIO_DURATION -gt $VIDEO_DURATION ]; then
   echo "🎵 Extending slideshow to match audio duration: ${AUDIO_DURATION}s"
-  # Calculate new duration per image
-  DURATION_PER_IMAGE=$(( (AUDIO_DURATION + ${#files[@]} - 1) / ${#files[@]} ))
-  VIDEO_DURATION=$((${#files[@]} * DURATION_PER_IMAGE))
-  echo "⏱️  Adjusted duration per image: $DURATION_PER_IMAGE seconds"
+  if [ $image_count -gt 0 ]; then
+    # Only stretch image duration, video clip durations stay fixed
+    remaining=$((AUDIO_DURATION - total_clip_duration_int))
+    DURATION_PER_IMAGE=$(( (remaining + image_count - 1) / image_count ))
+    VIDEO_DURATION=$(( image_count * DURATION_PER_IMAGE + total_clip_duration_int ))
+    echo "⏱️  Adjusted duration per image: $DURATION_PER_IMAGE seconds"
+  else
+    echo "⚠️  No images to extend, video clip durations are fixed"
+  fi
 fi
 
 # Create slideshow using concat demuxer for precise timing
 echo "🎬 Creating slideshow..."
-echo "⏱️  Each image will display for $DURATION_PER_IMAGE seconds"
+if [ $image_count -gt 0 ]; then
+  echo "⏱️  Each image will display for $DURATION_PER_IMAGE seconds"
+fi
 
 # Create input file list with durations
-for img in *.jpg; do
-  echo "file '$img'"
-  echo "duration $DURATION_PER_IMAGE"
-done >input.txt
+> input.txt
+for pf in "${processed_files[@]}"; do
+  echo "file '$pf'" >> input.txt
+  if [[ "$pf" == *.jpg ]]; then
+    echo "duration $DURATION_PER_IMAGE" >> input.txt
+  fi
+done
 
-# Add last image again (required by concat)
-last_image=$(find . -maxdepth 1 -name "*.jpg" -print0 | sort -zV | tail -z -n1 | tr -d '\0')
-echo "file '$last_image'" >>input.txt
+# Add last file again if it's a jpg (required by concat demuxer for images)
+last_file="${processed_files[-1]}"
+if [[ "$last_file" == *.jpg ]]; then
+  echo "file '$last_file'" >> input.txt
+fi
 
 # Create video using concat
 # Build FFmpeg command based on whether we have audio
@@ -528,12 +587,11 @@ echo "🧹 Cleaning up temporary files..."
 cd "$HOME" || exit 1
 rm -rf "$WORK_DIR"
 
-duration_seconds=$((${#files[@]} * DURATION_PER_IMAGE))
-duration_formatted=$(printf '%02d:%02d' $((duration_seconds / 60)) $((duration_seconds % 60)))
+duration_formatted=$(printf '%02d:%02d' $((VIDEO_DURATION / 60)) $((VIDEO_DURATION % 60)))
 
 echo "✅ Complete! Slideshow saved as: $OUTPUT_FILE"
-echo "📁 Original images in $SOURCE_DIR are untouched"
-echo "⏱️  Duration: $duration_formatted ($duration_seconds seconds)"
+echo "📁 Original files in $SOURCE_DIR are untouched"
+echo "⏱️  Duration: $duration_formatted ($VIDEO_DURATION seconds)"
 if [ -n "$AUDIO_FILE" ]; then
   echo "🎵 Background music added successfully"
 fi
