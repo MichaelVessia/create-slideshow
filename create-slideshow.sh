@@ -4,7 +4,7 @@ set -euo pipefail
 # Configuration
 DURATION_PER_IMAGE=5
 MUSIC_INPUT=""
-LOOP_AUDIO=false
+LOOP_AUDIO=true
 EXTEND_TO_AUDIO=false
 AUDIO_FADE_DURATION=3
 AUDIO_CACHE_DIR="$HOME/.cache/create-slideshow/audio"
@@ -18,7 +18,7 @@ usage() {
   echo ""
   echo "Options:"
   echo "  -m, --music <input>      YouTube URL(s), video ID(s), playlist file, or local audio file"
-  echo "  --loop-audio             Loop audio if shorter than video"
+  echo "  --no-loop-audio          Don't loop audio if shorter than video (loops by default)"
   echo "  --extend-to-audio        Extend slideshow to match audio duration"
   echo "  --fade-duration <sec>    Audio fade duration in seconds (default: 3)"
   echo "  --dedup                  Skip perceptually duplicate files"
@@ -42,8 +42,8 @@ while [[ $# -gt 0 ]]; do
       MUSIC_INPUT="$2"
       shift 2
       ;;
-    --loop-audio)
-      LOOP_AUDIO=true
+    --no-loop-audio)
+      LOOP_AUDIO=false
       shift
       ;;
     --extend-to-audio)
