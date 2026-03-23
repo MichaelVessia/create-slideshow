@@ -19,9 +19,10 @@
           default = pkgs.mkShell {
             packages = [
               pkgs.ffmpeg
-              pkgs.exiftool
               pkgs.imagemagick
               pkgs.yt-dlp
+              pkgs.bc
+              pkgs.xxd
             ];
           };
         });

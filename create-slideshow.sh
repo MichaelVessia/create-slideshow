@@ -383,20 +383,20 @@ compute_phash() {
       if $HAS_MAGICK; then
         raw_hex=$(ffmpeg -loglevel error -i "$file" -vframes 1 -f image2pipe -vcodec png pipe:1 2>/dev/null \
           | magick png:- -colorspace Gray -resize '9x8!' gray:- 2>/dev/null \
-          | xxd -p | tr -d '\n')
+          | od -An -tx1 | tr -d ' \n')
       elif $HAS_CONVERT; then
         raw_hex=$(ffmpeg -loglevel error -i "$file" -vframes 1 -f image2pipe -vcodec png pipe:1 2>/dev/null \
           | convert png:- -colorspace Gray -resize '9x8!' gray:- 2>/dev/null \
-          | xxd -p | tr -d '\n')
+          | od -An -tx1 | tr -d ' \n')
       fi
       ;;
     *)
       if $HAS_MAGICK; then
         raw_hex=$(magick "$file" -colorspace Gray -resize '9x8!' gray:- 2>/dev/null \
-          | xxd -p | tr -d '\n')
+          | od -An -tx1 | tr -d ' \n')
       elif $HAS_CONVERT; then
         raw_hex=$(convert "$file" -colorspace Gray -resize '9x8!' gray:- 2>/dev/null \
-          | xxd -p | tr -d '\n')
+          | od -An -tx1 | tr -d ' \n')
       fi
       ;;
   esac
@@ -596,10 +596,8 @@ if [[ -n "$FIRST_FILE" ]]; then
 fi
 
 # Detect available image tools
-HAS_EXIFTOOL=false
 HAS_MAGICK=false
 HAS_CONVERT=false
-command -v exiftool &>/dev/null && HAS_EXIFTOOL=true
 command -v magick &>/dev/null && HAS_MAGICK=true
 command -v convert &>/dev/null && HAS_CONVERT=true
 
@@ -687,16 +685,13 @@ done
 echo "📷 Found ${#files[@]} media files ($image_count images, $video_count videos)"
 echo "📋 Processing media files..."
 
-if $HAS_EXIFTOOL; then
-  echo "✅ Using exiftool for EXIF-based rotation"
-elif $HAS_MAGICK; then
-  echo "✅ Using ImageMagick v7 for EXIF-based rotation"
+if $HAS_MAGICK; then
+  echo "✅ Using ImageMagick v7 for auto-orient"
 elif $HAS_CONVERT; then
-  echo "✅ Using ImageMagick v6 for EXIF-based rotation"
+  echo "✅ Using ImageMagick v6 for auto-orient"
 else
-  echo "⚠️  Neither exiftool nor ImageMagick found. Installing one is recommended."
-  echo "   Install with: sudo apt install exiftool  OR  sudo apt install imagemagick"
-  echo "   Continuing without auto-rotation for images..."
+  echo "⚠️  ImageMagick not found. Images may not be rotated correctly."
+  echo "   Install with: sudo apt install imagemagick"
 fi
 
 processed_files=()
@@ -712,10 +707,7 @@ for i in "${!files[@]}"; do
   case "$ext_lower" in
     jpg|jpeg|png)
       output_name="${seq_num}.jpg"
-      if $HAS_EXIFTOOL; then
-        cp "$src" "$output_name"
-        exiftool -overwrite_original -Orientation= -n -q "$output_name"
-      elif $HAS_MAGICK; then
+      if $HAS_MAGICK; then
         magick "$src" -auto-orient "$output_name"
       elif $HAS_CONVERT; then
         convert "$src" -auto-orient "$output_name" 2>/dev/null || convert "$src" -auto-orient "$output_name"
