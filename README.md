@@ -1,6 +1,8 @@
 # Create Slideshow
 
-A safe, user-friendly Bash script that creates MP4 video slideshows from collections of images. The script automatically handles image rotation, randomizes the order, and produces professional-quality video output.
+This is my least favorite program to use, because reaching for it means someone in my family has passed away. It creates MP4 slideshows for funeral homes from collections of photos and videos.
+
+The script handles image rotation, randomizes the order, and produces Full HD video output with optional background music.
 
 ## Features
 

@@ -23,6 +23,7 @@
               pkgs.yt-dlp
               pkgs.bc
               pkgs.xxd
+              pkgs.gawk
             ];
           };
         });
