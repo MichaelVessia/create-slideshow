@@ -877,6 +877,7 @@ if [ -n "$AUDIO_FILE" ]; then
         -c:v libx264 \
         -c:a aac -b:a 192k \
         -pix_fmt yuv420p \
+        -movflags +faststart \
         -t "$VIDEO_DURATION" \
         -y "$OUTPUT_FILE" 2>&1 | grep -v "deprecated pixel format"
     else
@@ -887,6 +888,7 @@ if [ -n "$AUDIO_FILE" ]; then
         -c:v libx264 \
         -c:a aac -b:a 192k \
         -pix_fmt yuv420p \
+        -movflags +faststart \
         -t "$VIDEO_DURATION" \
         -y "$OUTPUT_FILE" 2>&1 | grep -v "deprecated pixel format"
     fi
@@ -898,6 +900,7 @@ if [ -n "$AUDIO_FILE" ]; then
       -vf "scale=1920:1080:force_original_aspect_ratio=decrease:eval=frame,pad=1920:1080:-1:-1:color=black,format=yuv420p" \
       -c:v libx264 \
       -pix_fmt yuv420p \
+      -movflags +faststart \
       -y "$OUTPUT_FILE" 2>&1 | grep -v "deprecated pixel format"
   fi
 else
@@ -907,6 +910,7 @@ else
     -vf "scale=1920:1080:force_original_aspect_ratio=decrease:eval=frame,pad=1920:1080:-1:-1:color=black,format=yuv420p" \
     -c:v libx264 \
     -pix_fmt yuv420p \
+    -movflags +faststart \
     -y "$OUTPUT_FILE" 2>&1 | grep -v "deprecated pixel format"
 fi
 
