@@ -491,6 +491,11 @@ fi
 # Convert to absolute path
 SOURCE_DIR=$(cd "$SOURCE_DIR" && pwd)
 
+# Resolve relative music input path before cd
+if [[ -n "$MUSIC_INPUT" && "$MUSIC_INPUT" != /* && -f "$MUSIC_INPUT" ]]; then
+  MUSIC_INPUT="$(cd "$(dirname "$MUSIC_INPUT")" && pwd)/$(basename "$MUSIC_INPUT")"
+fi
+
 # Set up working directory and output file
 WORK_DIR="$HOME/slideshow_temp_$$"
 if [[ -n "$OUTPUT" ]]; then
