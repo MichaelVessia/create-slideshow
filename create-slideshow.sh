@@ -11,6 +11,8 @@ AUDIO_CACHE_DIR="$HOME/.cache/create-slideshow/audio"
 DEDUP=false
 DEDUP_THRESHOLD=10
 HASH_CACHE_FILE="$HOME/.cache/create-slideshow/hashes.tsv"
+FIRST_FILE=""
+OUTPUT=""
 
 # Function to display usage
 usage() {
@@ -21,6 +23,8 @@ usage() {
   echo "  --no-loop-audio          Don't loop audio if shorter than video (loops by default)"
   echo "  --extend-to-audio        Extend slideshow to match audio duration"
   echo "  --fade-duration <sec>    Audio fade duration in seconds (default: 3)"
+  echo "  -o, --output <path>      Output file or directory (default: ~/slideshow_<timestamp>.mp4)"
+  echo "  --first <file>           Pin a file as the first in the slideshow"
   echo "  --dedup                  Skip perceptually duplicate files"
   echo "  --dedup-threshold <N>    Hamming distance threshold (default: 10)"
   echo "  --clear-cache            Clear audio and hash caches and exit"
@@ -52,6 +56,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --fade-duration)
       AUDIO_FADE_DURATION="$2"
+      shift 2
+      ;;
+    -o|--output)
+      OUTPUT="$2"
+      shift 2
+      ;;
+    --first)
+      FIRST_FILE="$2"
       shift 2
       ;;
     --dedup)
@@ -481,7 +493,18 @@ SOURCE_DIR=$(cd "$SOURCE_DIR" && pwd)
 
 # Set up working directory and output file
 WORK_DIR="$HOME/slideshow_temp_$$"
-OUTPUT_FILE="$HOME/slideshow_$(date +%Y%m%d_%H%M%S).mp4"
+if [[ -n "$OUTPUT" ]]; then
+  # If output is a directory, put a timestamped file inside it
+  if [[ -d "$OUTPUT" ]] || [[ "$OUTPUT" == */ ]]; then
+    mkdir -p "$OUTPUT"
+    OUTPUT_FILE="$OUTPUT/slideshow_$(date +%Y%m%d_%H%M%S).mp4"
+  else
+    mkdir -p "$(dirname "$OUTPUT")"
+    OUTPUT_FILE="$OUTPUT"
+  fi
+else
+  OUTPUT_FILE="$HOME/slideshow_$(date +%Y%m%d_%H%M%S).mp4"
+fi
 
 # Safety check
 echo "🔒 This script is NON-DESTRUCTIVE"
@@ -538,6 +561,33 @@ if [ ${#files[@]} -eq 0 ]; then
   cd "$HOME" || exit 1
   rmdir "$WORK_DIR"
   exit 1
+fi
+
+# Pin --first file to front of array
+if [[ -n "$FIRST_FILE" ]]; then
+  # Resolve to absolute path relative to SOURCE_DIR if not absolute
+  if [[ "$FIRST_FILE" != /* ]]; then
+    FIRST_FILE="$SOURCE_DIR/$FIRST_FILE"
+  fi
+  if [[ ! -f "$FIRST_FILE" ]]; then
+    echo "❌ Error: --first file not found: $FIRST_FILE"
+    exit 1
+  fi
+  pinned=()
+  rest=()
+  for f in "${files[@]}"; do
+    if [[ "$f" == "$FIRST_FILE" ]]; then
+      pinned=("$f")
+    else
+      rest+=("$f")
+    fi
+  done
+  if [[ ${#pinned[@]} -eq 0 ]]; then
+    echo "❌ Error: --first file not in media list: $FIRST_FILE"
+    exit 1
+  fi
+  files=("${pinned[@]}" "${rest[@]}")
+  echo "📌 Pinned first: $(basename "$FIRST_FILE")"
 fi
 
 # Detect available image tools
