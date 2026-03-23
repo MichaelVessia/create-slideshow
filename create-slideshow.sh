@@ -439,22 +439,6 @@ compute_phash() {
   echo "$hash_hex"
 }
 
-# Compute Hamming distance between two 16-char hex hashes
-hamming_distance() {
-  local h1="$1"
-  local h2="$2"
-  # Popcount lookup for 0-15
-  local -a popcount=(0 1 1 2 1 2 2 3 1 2 2 3 2 3 3 4)
-  local dist=0
-
-  for i in $(seq 0 15); do
-    local xor=$(( 16#${h1:$i:1} ^ 16#${h2:$i:1} ))
-    ((dist += popcount[xor]))
-  done
-
-  echo "$dist"
-}
-
 # Load hash cache from TSV file into HASH_CACHE associative array
 load_hash_cache() {
   declare -gA HASH_CACHE
@@ -601,10 +585,42 @@ HAS_CONVERT=false
 command -v magick &>/dev/null && HAS_MAGICK=true
 command -v convert &>/dev/null && HAS_CONVERT=true
 
-# Perceptual dedup
+# Dedup
 if [[ "$DEDUP" == true ]]; then
+  # Prefer images over videos with the same basename (e.g. IMG_1234.jpg + IMG_1234.MOV)
+  declare -A basename_has_image=()
+  for f in "${files[@]}"; do
+    base="${f%.*}"
+    ext_lower=$(echo "${f##*.}" | tr '[:upper:]' '[:lower:]')
+    case "$ext_lower" in
+      jpg|jpeg|png|heic) basename_has_image["$base"]=1 ;;
+    esac
+  done
+
+  declare -a dedup_basename_filtered=()
+  basename_dropped=0
+  for f in "${files[@]}"; do
+    base="${f%.*}"
+    ext_lower=$(echo "${f##*.}" | tr '[:upper:]' '[:lower:]')
+    case "$ext_lower" in
+      mov|mp4|avi|mkv|webm|m4v)
+        if [[ -n "${basename_has_image[$base]:-}" ]]; then
+          echo "  Dropping video (image exists): $(basename "$f")"
+          ((basename_dropped++)) || true
+          continue
+        fi
+        ;;
+    esac
+    dedup_basename_filtered+=("$f")
+  done
+
+  if [[ $basename_dropped -gt 0 ]]; then
+    echo "🔍 Dropped $basename_dropped video(s) with matching image basenames"
+    files=("${dedup_basename_filtered[@]}")
+  fi
+
   if ! $HAS_MAGICK && ! $HAS_CONVERT; then
-    echo "⚠️  Neither magick nor convert found, skipping dedup"
+    echo "⚠️  Neither magick nor convert found, skipping perceptual dedup"
   else
     echo "🔍 Computing perceptual hashes for dedup..."
     load_hash_cache
@@ -636,21 +652,62 @@ if [[ "$DEDUP" == true ]]; then
       fi
     done
 
-    # Pairwise comparison, mark later files as duplicates
-    declare -A dup_indices=()
+    # Pairwise comparison via awk (avoids ~n^2 subshell forks)
+    # Build input: index, hash, basename per line
+    awk_input=""
     for ((i = 0; i < ${#files[@]}; i++)); do
-      [[ -n "${dup_indices[$i]:-}" ]] && continue
-      [[ -z "${file_hashes[$i]}" ]] && continue
-      for ((j = i + 1; j < ${#files[@]}; j++)); do
-        [[ -n "${dup_indices[$j]:-}" ]] && continue
-        [[ -z "${file_hashes[$j]}" ]] && continue
-        dist=$(hamming_distance "${file_hashes[$i]}" "${file_hashes[$j]}")
-        if [[ $dist -lt $DEDUP_THRESHOLD ]]; then
-          dup_indices[$j]=1
-          echo "  Duplicate: $(basename "${files[$j]}") ~ $(basename "${files[$i]}") (distance $dist)"
-        fi
-      done
+      awk_input+="${i}"$'\t'"${file_hashes[$i]}"$'\t'"$(basename "${files[$i]}")"$'\n'
     done
+
+    # awk does all comparisons in-process, outputs duplicate indices
+    dup_output=""
+    dup_output=$(printf '%s' "$awk_input" | gawk -v threshold="$DEDUP_THRESHOLD" '
+    BEGIN {
+      FS = "\t"
+      split("0 1 1 2 1 2 2 3 1 2 2 3 2 3 3 4", pop, " ")
+      hex["0"]=0;  hex["1"]=1;  hex["2"]=2;  hex["3"]=3
+      hex["4"]=4;  hex["5"]=5;  hex["6"]=6;  hex["7"]=7
+      hex["8"]=8;  hex["9"]=9;  hex["a"]=10; hex["b"]=11
+      hex["c"]=12; hex["d"]=13; hex["e"]=14; hex["f"]=15
+    }
+    {
+      idx[NR] = $1
+      hashes[NR] = $2
+      names[NR] = $3
+      n = NR
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        if (hashes[i] == "" || dup[i]) continue
+        for (j = i + 1; j <= n; j++) {
+          if (hashes[j] == "" || dup[j]) continue
+          h1 = hashes[i]; h2 = hashes[j]
+          dist = 0
+          for (k = 1; k <= 16; k++) {
+            c1 = substr(h1, k, 1)
+            c2 = substr(h2, k, 1)
+            xor_val = xor(hex[c1], hex[c2])
+            dist += pop[xor_val + 1]
+          }
+          if (dist < threshold) {
+            dup[j] = 1
+            printf "DUP\t%s\t%s\t%d\n", names[j], names[i], dist
+            print idx[j]
+          }
+        }
+      }
+    }
+    ')
+
+    declare -A dup_indices=()
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      if [[ "$line" == DUP$'\t'* ]]; then
+        echo "  Duplicate: $(echo "$line" | cut -f2) ~ $(echo "$line" | cut -f3) (distance $(echo "$line" | cut -f4))"
+      else
+        dup_indices[$line]=1
+      fi
+    done <<< "$dup_output"
 
     # Filter out duplicates
     if [[ ${#dup_indices[@]} -gt 0 ]]; then
