@@ -8,6 +8,9 @@ LOOP_AUDIO=false
 EXTEND_TO_AUDIO=false
 AUDIO_FADE_DURATION=3
 AUDIO_CACHE_DIR="$HOME/.cache/create-slideshow/audio"
+DEDUP=false
+DEDUP_THRESHOLD=10
+HASH_CACHE_FILE="$HOME/.cache/create-slideshow/hashes.tsv"
 
 # Function to display usage
 usage() {
@@ -18,7 +21,9 @@ usage() {
   echo "  --loop-audio             Loop audio if shorter than video"
   echo "  --extend-to-audio        Extend slideshow to match audio duration"
   echo "  --fade-duration <sec>    Audio fade duration in seconds (default: 3)"
-  echo "  --clear-cache            Clear audio cache and exit"
+  echo "  --dedup                  Skip perceptually duplicate files"
+  echo "  --dedup-threshold <N>    Hamming distance threshold (default: 10)"
+  echo "  --clear-cache            Clear audio and hash caches and exit"
   echo "  --show-cache             Show cache status and exit"
   echo ""
   echo "Examples:"
@@ -47,6 +52,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --fade-duration)
       AUDIO_FADE_DURATION="$2"
+      shift 2
+      ;;
+    --dedup)
+      DEDUP=true
+      shift
+      ;;
+    --dedup-threshold)
+      DEDUP_THRESHOLD="$2"
       shift 2
       ;;
     --clear-cache)
@@ -155,6 +168,19 @@ show_cache_status() {
       echo "  $line"
     done
   fi
+
+  echo ""
+  if [[ -f "$HASH_CACHE_FILE" ]]; then
+    local hash_count
+    hash_count=$(wc -l < "$HASH_CACHE_FILE")
+    local hash_size
+    hash_size=$(du -sh "$HASH_CACHE_FILE" 2>/dev/null | cut -f1 || echo "0")
+    echo "Hash cache: $HASH_CACHE_FILE"
+    echo "Cached hashes: $hash_count"
+    echo "Hash cache size: $hash_size"
+  else
+    echo "Hash cache: not yet created"
+  fi
 }
 
 # Clear audio cache
@@ -167,10 +193,20 @@ clear_cache() {
       rm -f "$AUDIO_CACHE_DIR"/*.mp3
       echo "Cache cleared."
     else
-      echo "Cache is already empty."
+      echo "Audio cache is already empty."
     fi
   else
-    echo "Cache directory does not exist."
+    echo "Audio cache directory does not exist."
+  fi
+
+  if [[ -f "$HASH_CACHE_FILE" ]]; then
+    local hash_count
+    hash_count=$(wc -l < "$HASH_CACHE_FILE")
+    echo "Clearing $hash_count cached hashes from $HASH_CACHE_FILE"
+    rm -f "$HASH_CACHE_FILE"
+    echo "Hash cache cleared."
+  else
+    echo "Hash cache does not exist."
   fi
 }
 
@@ -309,6 +345,125 @@ get_audio_duration() {
   ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$audio_file" 2>/dev/null | cut -d. -f1
 }
 
+# Get file identity (mtime + size) for cache validation
+get_file_identity() {
+  local filepath="$1"
+  # Linux stat format, with macOS fallback
+  if stat -c '%Y %s' "$filepath" 2>/dev/null; then
+    return
+  fi
+  stat -f '%m %z' "$filepath"
+}
+
+# Compute perceptual hash (dHash) for an image or video file
+# Produces a 16-char hex string (64-bit fingerprint)
+compute_phash() {
+  local file="$1"
+  local ext="${file##*.}"
+  local ext_lower
+  ext_lower=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
+  local raw_hex=""
+
+  # Get 9x8 grayscale pixel data as hex
+  case "$ext_lower" in
+    mov|mp4|avi|mkv|webm|m4v)
+      # Extract first frame from video, pipe to magick
+      if $HAS_MAGICK; then
+        raw_hex=$(ffmpeg -loglevel error -i "$file" -vframes 1 -f image2pipe -vcodec png pipe:1 2>/dev/null \
+          | magick png:- -colorspace Gray -resize '9x8!' gray:- 2>/dev/null \
+          | xxd -p | tr -d '\n')
+      elif $HAS_CONVERT; then
+        raw_hex=$(ffmpeg -loglevel error -i "$file" -vframes 1 -f image2pipe -vcodec png pipe:1 2>/dev/null \
+          | convert png:- -colorspace Gray -resize '9x8!' gray:- 2>/dev/null \
+          | xxd -p | tr -d '\n')
+      fi
+      ;;
+    *)
+      if $HAS_MAGICK; then
+        raw_hex=$(magick "$file" -colorspace Gray -resize '9x8!' gray:- 2>/dev/null \
+          | xxd -p | tr -d '\n')
+      elif $HAS_CONVERT; then
+        raw_hex=$(convert "$file" -colorspace Gray -resize '9x8!' gray:- 2>/dev/null \
+          | xxd -p | tr -d '\n')
+      fi
+      ;;
+  esac
+
+  # Need exactly 72 pixels (144 hex chars)
+  if [[ ${#raw_hex} -lt 144 ]]; then
+    echo ""
+    return 1
+  fi
+
+  # Build dHash: for each row (9 pixels), compare adjacent pairs (8 comparisons)
+  # 8 rows x 8 bits = 64 bits = 16 hex chars
+  local hash_bits=""
+  for row in $(seq 0 7); do
+    for col in $(seq 0 7); do
+      local idx=$(( (row * 9 + col) * 2 ))
+      local next_idx=$(( (row * 9 + col + 1) * 2 ))
+      local pixel_val=$((16#${raw_hex:$idx:2}))
+      local next_val=$((16#${raw_hex:$next_idx:2}))
+      if [[ $pixel_val -lt $next_val ]]; then
+        hash_bits+="1"
+      else
+        hash_bits+="0"
+      fi
+    done
+  done
+
+  # Convert 64-bit binary string to 16-char hex
+  local hash_hex=""
+  for i in $(seq 0 4 60); do
+    local nibble="${hash_bits:$i:4}"
+    local val=0
+    [[ "${nibble:0:1}" == "1" ]] && ((val += 8))
+    [[ "${nibble:1:1}" == "1" ]] && ((val += 4))
+    [[ "${nibble:2:1}" == "1" ]] && ((val += 2))
+    [[ "${nibble:3:1}" == "1" ]] && ((val += 1))
+    hash_hex+=$(printf '%x' $val)
+  done
+
+  echo "$hash_hex"
+}
+
+# Compute Hamming distance between two 16-char hex hashes
+hamming_distance() {
+  local h1="$1"
+  local h2="$2"
+  # Popcount lookup for 0-15
+  local -a popcount=(0 1 1 2 1 2 2 3 1 2 2 3 2 3 3 4)
+  local dist=0
+
+  for i in $(seq 0 15); do
+    local xor=$(( 16#${h1:$i:1} ^ 16#${h2:$i:1} ))
+    ((dist += popcount[xor]))
+  done
+
+  echo "$dist"
+}
+
+# Load hash cache from TSV file into HASH_CACHE associative array
+load_hash_cache() {
+  declare -gA HASH_CACHE
+  if [[ ! -f "$HASH_CACHE_FILE" ]]; then
+    return
+  fi
+  while IFS=$'\t' read -r path mtime size phash; do
+    [[ -z "$path" || "$path" == "#"* ]] && continue
+    HASH_CACHE["$path"]="${mtime}	${size}	${phash}"
+  done < "$HASH_CACHE_FILE"
+}
+
+# Save hash cache associative array back to TSV file
+save_hash_cache() {
+  mkdir -p "$(dirname "$HASH_CACHE_FILE")"
+  > "$HASH_CACHE_FILE"
+  for path in "${!HASH_CACHE[@]}"; do
+    printf '%s\t%s\n' "$path" "${HASH_CACHE[$path]}" >> "$HASH_CACHE_FILE"
+  done
+}
+
 # Check for required directory argument
 if [ -z "$SOURCE_DIR" ]; then
   echo "Error: No directory specified"
@@ -385,6 +540,83 @@ if [ ${#files[@]} -eq 0 ]; then
   exit 1
 fi
 
+# Detect available image tools
+HAS_EXIFTOOL=false
+HAS_MAGICK=false
+HAS_CONVERT=false
+command -v exiftool &>/dev/null && HAS_EXIFTOOL=true
+command -v magick &>/dev/null && HAS_MAGICK=true
+command -v convert &>/dev/null && HAS_CONVERT=true
+
+# Perceptual dedup
+if [[ "$DEDUP" == true ]]; then
+  if ! $HAS_MAGICK && ! $HAS_CONVERT; then
+    echo "⚠️  Neither magick nor convert found, skipping dedup"
+  else
+    echo "🔍 Computing perceptual hashes for dedup..."
+    load_hash_cache
+
+    declare -a file_hashes=()
+    for f in "${files[@]}"; do
+      identity=$(get_file_identity "$f")
+      cached="${HASH_CACHE[$f]:-}"
+      if [[ -n "$cached" ]]; then
+        cached_mtime=$(echo "$cached" | cut -f1)
+        cached_size=$(echo "$cached" | cut -f2)
+        cached_hash=$(echo "$cached" | cut -f3)
+        file_mtime=$(echo "$identity" | cut -d' ' -f1)
+        file_size=$(echo "$identity" | cut -d' ' -f2)
+        if [[ "$cached_mtime" == "$file_mtime" && "$cached_size" == "$file_size" ]]; then
+          file_hashes+=("$cached_hash")
+          continue
+        fi
+      fi
+      echo "  Computing hash: $(basename "$f")" >&2
+      phash=$(compute_phash "$f")
+      if [[ -n "$phash" ]]; then
+        file_mtime=$(echo "$identity" | cut -d' ' -f1)
+        file_size=$(echo "$identity" | cut -d' ' -f2)
+        HASH_CACHE["$f"]="${file_mtime}	${file_size}	${phash}"
+        file_hashes+=("$phash")
+      else
+        file_hashes+=("")
+      fi
+    done
+
+    # Pairwise comparison, mark later files as duplicates
+    declare -A dup_indices=()
+    for ((i = 0; i < ${#files[@]}; i++)); do
+      [[ -n "${dup_indices[$i]:-}" ]] && continue
+      [[ -z "${file_hashes[$i]}" ]] && continue
+      for ((j = i + 1; j < ${#files[@]}; j++)); do
+        [[ -n "${dup_indices[$j]:-}" ]] && continue
+        [[ -z "${file_hashes[$j]}" ]] && continue
+        dist=$(hamming_distance "${file_hashes[$i]}" "${file_hashes[$j]}")
+        if [[ $dist -lt $DEDUP_THRESHOLD ]]; then
+          dup_indices[$j]=1
+          echo "  Duplicate: $(basename "${files[$j]}") ~ $(basename "${files[$i]}") (distance $dist)"
+        fi
+      done
+    done
+
+    # Filter out duplicates
+    if [[ ${#dup_indices[@]} -gt 0 ]]; then
+      declare -a filtered_files=()
+      for ((i = 0; i < ${#files[@]}; i++)); do
+        if [[ -z "${dup_indices[$i]:-}" ]]; then
+          filtered_files+=("${files[$i]}")
+        fi
+      done
+      echo "🔍 Skipped ${#dup_indices[@]} duplicate(s), ${#filtered_files[@]} files remaining"
+      files=("${filtered_files[@]}")
+    else
+      echo "🔍 No duplicates found"
+    fi
+
+    save_hash_cache
+  fi
+fi
+
 # Classify files into images and videos
 image_count=0
 video_count=0
@@ -399,14 +631,6 @@ done
 
 echo "📷 Found ${#files[@]} media files ($image_count images, $video_count videos)"
 echo "📋 Processing media files..."
-
-# Detect available image tools
-HAS_EXIFTOOL=false
-HAS_MAGICK=false
-HAS_CONVERT=false
-command -v exiftool &>/dev/null && HAS_EXIFTOOL=true
-command -v magick &>/dev/null && HAS_MAGICK=true
-command -v convert &>/dev/null && HAS_CONVERT=true
 
 if $HAS_EXIFTOOL; then
   echo "✅ Using exiftool for EXIF-based rotation"
